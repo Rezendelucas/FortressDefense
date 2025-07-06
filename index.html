@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Tower Defense Phaser</title>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.js"></script>
+  <style>
+    body { margin: 0; background: #111; }
+    canvas { display: block; margin: auto; }
+  </style>
+</head>
+<body>
+
+<script>
+const config = {
+  type: Phaser.AUTO,
+  width: 650,
+  height: 650,
+  backgroundColor: '#222',
+  physics: { default: 'arcade' },
+  scene: { preload, create, update }
+};
+
+const game = new Phaser.Game(config);
+
+let tower, towerGraphic, enemies, bullets;
+let lastEnemyTime = 0, lastShotTime = 0;
+let score = 0, scoreText;
+let lives = 3, hearts = [];
+let gameStarted = false;
+let menuText, restartText;
+
+function preload() {
+  this.load.image('enemy', 'https://labs.phaser.io/assets/sprites/ufo.png');
+  this.load.image('bullet', 'https://labs.phaser.io/assets/sprites/bullets/bullet7.png');
+}
+
+function create() {
+  const CELL_SIZE = 50;
+  const CELL_CENTER = CELL_SIZE / 2;
+  const cellX = 6, cellY = 6;
+  const towerX = cellX * CELL_SIZE + CELL_CENTER;
+  const towerY = cellY * CELL_SIZE + CELL_CENTER;
+
+  // Desenha grid azul claro
+  const grid = this.add.graphics();
+  grid.lineStyle(1, 0x66ccff, 0.2);
+  for (let x = CELL_SIZE; x < config.width; x += CELL_SIZE) {
+    grid.beginPath();
+    grid.moveTo(x, 0);
+    grid.lineTo(x, config.width);
+    grid.strokePath();
+  }
+  for (let y = CELL_SIZE; y < config.height; y += CELL_SIZE) {
+    grid.beginPath();
+    grid.moveTo(0, y);
+    grid.lineTo(config.height, y);
+    grid.strokePath();
+  }
+
+  // Torre visual (quadrado vermelho)
+  towerGraphic = this.add.graphics();
+  towerGraphic.fillStyle(0xff0000, 1);
+  towerGraphic.fillRect(-CELL_CENTER, -CELL_CENTER, CELL_SIZE, CELL_SIZE);
+  towerGraphic.x = towerX;
+  towerGraphic.y = towerY;
+
+  // Hitbox física invisível
+  const pixel = this.add.graphics();
+  pixel.fillStyle(0xffffff);
+  pixel.fillRect(0, 0, 1, 1);
+  pixel.generateTexture('hitboxPixel', 1, 1);
+  pixel.destroy();
+
+  tower = this.physics.add.staticSprite(towerX, towerY, 'hitboxPixel')
+    .setDisplaySize(CELL_SIZE, CELL_SIZE)
+    .setVisible(false);
+
+  // Grupos
+  enemies = this.physics.add.group();
+  bullets = this.physics.add.group();
+
+  this.physics.add.overlap(bullets, enemies, hitEnemy, null, this);
+  this.physics.add.overlap(enemies, tower, enemyHitsTower, null, this);
+
+  // HUD
+  scoreText = this.add.text(10, 10, 'Pontos: 0', { fontSize: '20px', fill: '#fff' });
+
+  for (let i = 0; i < lives; i++) {
+    let circle = this.add.graphics();
+    circle.fillStyle(0xff0000, 1);
+    circle.fillCircle(0, 0, 8);
+    circle.x = 540 + i * 20;
+    circle.y = 20;
+    hearts.push(circle);
+  }
+
+  // Menu de início
+  menuText = this.add.text(150, 250, 'Clique para Iniciar', {
+    fontSize: '32px', fill: '#ffffff'
+  });
+  menuText.setInteractive().on('pointerdown', () => {
+    menuText.setVisible(false);
+    gameStarted = true;
+  });
+
+  // Menu de reinício
+  restartText = this.add.text(130, 280, 'Clique para Reiniciar', {
+    fontSize: '28px', fill: '#ffffff'
+  }).setVisible(false).setInteractive().on('pointerdown', () => {
+    restartGame(this);
+  });
+}
+
+function update(time, delta) {
+  if (!gameStarted) return;
+
+  if (time > lastEnemyTime + 1500) {
+    spawnEnemy(this);
+    lastEnemyTime = time;
+  }
+
+  const nearest = getNearestEnemy();
+  if (nearest && time > lastShotTime + 1000) {
+    shootAt(this, nearest);
+    lastShotTime = time;
+  }
+
+  enemies.children.iterate(enemy => {
+    if (enemy && enemy.active) {
+      this.physics.moveToObject(enemy, tower, 60);
+      updateHealthBar(enemy);
+    }
+  });
+}
+
+function spawnEnemy(scene) {
+  const edge = Phaser.Math.Between(0, 3);
+  let x, y;
+  switch (edge) {
+    case 0: x = 0; y = Phaser.Math.Between(0, 600); break;
+    case 1: x = 600; y = Phaser.Math.Between(0, 600); break;
+    case 2: x = Phaser.Math.Between(0, 600); y = 0; break;
+    case 3: x = Phaser.Math.Between(0, 600); y = 600; break;
+  }
+
+  const enemy = scene.physics.add.sprite(x, y, 'enemy').setScale(0.5);
+  enemy.hp = 3;
+
+  const barBg = scene.add.rectangle(enemy.x, enemy.y - 25, 30, 5, 0x550000).setDepth(1);
+  const bar = scene.add.rectangle(enemy.x, enemy.y - 25, 30, 5, 0xff0000).setDepth(2);
+  enemy.healthBar = { bg: barBg, bar: bar };
+
+  enemies.add(enemy);
+}
+
+function shootAt(scene, target) {
+  const bullet = scene.physics.add.sprite(tower.x, tower.y, 'bullet').setScale(0.5);
+  bullets.add(bullet);
+  scene.physics.moveToObject(bullet, target, 300);
+}
+
+function hitEnemy(bullet, enemy) {
+  bullet.destroy();
+  enemy.hp--;
+
+  if (enemy.hp <= 0) {
+    score += 10;
+    scoreText.setText('Pontos: ' + score);
+    enemy.healthBar.bar.destroy();
+    enemy.healthBar.bg.destroy();
+    enemy.destroy();
+  }
+}
+
+function updateHealthBar(enemy) {
+  if (!enemy.healthBar) return;
+  const { bar, bg } = enemy.healthBar;
+  bar.x = bg.x = enemy.x;
+  bar.y = bg.y = enemy.y - 25;
+  bar.width = 30 * (enemy.hp / 3);
+}
+
+function getNearestEnemy() {
+  let minDist = Infinity;
+  let closest = null;
+  enemies.children.iterate(enemy => {
+    if (enemy && enemy.active) {
+      const dist = Phaser.Math.Distance.Between(tower.x, tower.y, enemy.x, enemy.y);
+      if (dist < minDist) {
+        minDist = dist;
+        closest = enemy;
+      }
+    }
+  });
+  return closest;
+}
+
+function enemyHitsTower(towerBody, enemy) {
+  if (!enemy.active) return;
+
+  enemy.healthBar.bar.destroy();
+  enemy.healthBar.bg.destroy();
+  enemy.destroy();
+
+  lives--;
+  if (hearts[lives]) hearts[lives].destroy();
+
+  if (lives <= 0) {
+    towerGraphic.clear();
+    towerGraphic.fillStyle(0x880000, 1);
+    towerGraphic.fillRect(-25, -25, 50, 50);
+    gameOver();
+  }
+}
+
+function gameOver() {
+  gameStarted = false;
+  restartText.setVisible(true);
+}
+
+function restartGame(scene) {
+  enemies.clear(true, true);
+  bullets.clear(true, true);
+
+  lives = 3;
+  hearts.forEach(h => h.destroy());
+  hearts = [];
+
+  for (let i = 0; i < lives; i++) {
+    let circle = scene.add.graphics();
+    circle.fillStyle(0xff0000, 1);
+    circle.fillCircle(0, 0, 8);
+    circle.x = 540 + i * 20;
+    circle.y = 20;
+    hearts.push(circle);
+  }
+
+  score = 0;
+  scoreText.setText('Pontos: 0');
+
+  towerGraphic.clear();
+  towerGraphic.fillStyle(0xff0000, 1);
+  towerGraphic.fillRect(-25, -25, 50, 50);
+
+  restartText.setVisible(false);
+  gameStarted = true;
+}
+</script>
+</body>
+</html>
